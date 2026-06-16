@@ -2,13 +2,12 @@
 
 Programming and Programming Languages (PAPL) textbook archiver
 
-`papl` is a single pure-Go binary. It reads public papl data
-over plain HTTPS, shapes it into clean records, and prints output that pipes
-into the rest of your tools. No API key, nothing to run alongside it.
+`papl` is a single pure-Go binary that fetches and locally archives the
+"Programming and Programming Languages" textbook by Shriram Krishnamurthi
+(Brown University) from `papl.cs.brown.edu`. Every chapter is stored as
+structured Markdown in a local SQLite database.
 
-The same package is also a [resource-URI driver](#use-it-as-a-resource-uri-driver),
-so a host program like [ant](https://github.com/tamnd/ant) can address
-papl as `papl://` URIs.
+No API key required.
 
 ## Install
 
@@ -16,69 +15,118 @@ papl as `papl://` URIs.
 go install github.com/tamnd/papl-cli/cmd/papl@latest
 ```
 
-Or grab a prebuilt binary from the [releases](https://github.com/tamnd/papl-cli/releases), or run
-the container image:
+Or grab a prebuilt binary from the [releases](https://github.com/tamnd/papl-cli/releases).
+
+## Quick start
 
 ```bash
-docker run --rm ghcr.io/tamnd/papl:latest --help
+# Step 1: parse table of contents and enqueue chapter URLs
+papl seed
+
+# Step 2: fetch each chapter and store content in DB
+papl crawl
+
+# Step 3: write all chapters to markdown files
+papl export
+
+# Check progress at any time
+papl info
 ```
 
-## Usage
+## Commands
+
+### `papl seed`
+
+Fetch the TOC page, discover all chapter URLs, and enqueue unseen ones.
+
+```
+papl seed [--db PATH] [--state PATH] [--base-url URL] [--delay MS]
+```
+
+### `papl crawl`
+
+Fetch each enqueued chapter, convert HTML to Markdown, store in DB.
+
+```
+papl crawl [--db PATH] [--state PATH] [--base-url URL] [--delay MS]
+           [--timeout S] [--workers N]
+```
+
+### `papl export`
+
+Write each chapter to a `.md` file named by slug.
+
+```
+papl export [--db PATH] [--export-dir PATH]
+```
+
+Output: `$HOME/data/papl/export/{slug}.md`
+
+Each file has front-matter:
+```yaml
+---
+title: "Getting Started"
+edition: 2020
+url: https://papl.cs.brown.edu/2020/getting-started.html
+exercise_count: 3
+code_block_count: 12
+has_do_now: true
+do_now_count: 2
+fetched_at: 2026-06-14T10:00:00Z
+---
+```
+
+### `papl info`
+
+Show DB stats and queue depth.
+
+```
+papl info [--db PATH] [--state PATH]
+```
+
+### `papl queue`
+
+List queue items by status.
+
+```
+papl queue [--status pending|done|failed|in_progress] [--limit N]
+```
+
+### `papl reset-failed`
+
+Reset all failed items to pending for retry.
+
+```
+papl reset-failed [--state PATH]
+```
+
+## Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--db` | `$HOME/data/papl/papl.db` | SQLite database |
+| `--state` | `$HOME/data/papl/state.db` | Crawl-queue database |
+| `--export-dir` | `$HOME/data/papl/export` | Markdown output directory |
+| `--base-url` | `https://papl.cs.brown.edu/2020/` | PAPL edition base URL |
+| `--delay` | `500` | Delay between requests (ms) |
+| `--timeout` | `30` | HTTP timeout (seconds) |
+| `--workers` | `4` | Parallel chapter fetch workers |
+
+## Multiple editions
+
+Use `--base-url` to archive older editions:
 
 ```bash
-papl page <path>                      # fetch one page as a record
-papl page <path> -o json              # as JSON, ready for jq
-papl page <path> --template '{{.Body}}'  # just the readable body text
-papl links <path>                     # the pages it links to, one per line
-papl --help                           # the whole command tree
-```
-
-Every command shares one output contract: `-o table|json|jsonl|csv|tsv|url|raw`,
-`--fields` to pick columns, `--template` for a custom line, and `-n` to limit.
-The default adapts to where output goes (a table on a terminal, JSONL in a
-pipe), so the same command reads well by hand and parses cleanly downstream.
-
-This is a fresh scaffold. It ships one example resource type, `page`, wired end
-to end. Model the real papl records in `papl/` and declare their
-operations in `papl/domain.go`; each one becomes a command, an HTTP
-route, and an MCP tool at once.
-
-## Serve it
-
-The same operations are available over HTTP and as an MCP tool set for agents,
-with no extra code:
-
-```bash
-papl serve --addr :7777    # GET /v1/page/<path>  returns NDJSON
-papl mcp                   # speak MCP over stdio
-```
-
-## Use it as a resource-URI driver
-
-`papl` registers a `papl` domain the way a program registers a
-database driver with `database/sql`. A host enables it with one blank import:
-
-```go
-import _ "github.com/tamnd/papl-cli/papl"
-```
-
-Then [ant](https://github.com/tamnd/ant) (or any program that links the package)
-dereferences `papl://` URIs without knowing anything about papl:
-
-```bash
-ant get papl://page/<path>   # fetch the record
-ant cat papl://page/<path>   # just the body text
-ant ls  papl://page/<path>   # the pages it links to, each addressable
-ant url papl://page/<path>   # the live https URL
+papl seed --base-url https://papl.cs.brown.edu/2018/
+papl crawl
 ```
 
 ## Development
 
 ```
-cmd/papl/   thin main: hands cli.NewApp to kit.Run
-cli/                 assembles the kit App from the papl domain
-papl/                the library: HTTP client, data models, and domain.go (the driver)
-docs/                tago documentation site
+cmd/papl/    main entry point
+cli/         cobra command tree
+papl/        library: client, parser, DB, state, tasks
 ```
 
 ```bash
@@ -86,20 +134,6 @@ make build      # ./bin/papl
 make test       # go test ./...
 make vet        # go vet ./...
 ```
-
-## Releasing
-
-Push a version tag and GitHub Actions runs GoReleaser, which builds the
-archives, Linux packages, the multi-arch GHCR image, checksums, SBOMs, and a
-cosign signature:
-
-```bash
-git tag v0.1.0
-git push --tags
-```
-
-The Homebrew and Scoop steps self-disable until their tokens exist, so the first
-release works with no extra secrets.
 
 ## License
 
