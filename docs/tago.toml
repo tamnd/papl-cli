@@ -1,0 +1,10 @@
+title       = "papl"
+baseURL     = "https://papl-cli.tamnd.com/"
+description = "Programming and Programming Languages (PAPL) textbook archiver"
+contentDir  = "content"
+outputDir   = "public"
+theme       = "tago-doks"
+syntaxHighlight = "true"
+
+[params]
+github = "https://github.com/tamnd/papl-cli"
